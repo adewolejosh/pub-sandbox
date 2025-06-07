@@ -19,69 +19,71 @@
 # switching into multi-client, event driven server
 # we fired up multiple clients connected to the port using 'nc localhost 8080' and sent messages...
 # also keyboard interrupt closed all open connections. GREAT!
+# ---
+# Now, a better approach is using selectors for select.
+# To be fair, code seems nicer with selectors, though much more abstracted
+# maybe explore how `selectors` work under the hood in python???
+# just went to the library, it feels like a bunch of classes that listen to the fileobj you pass in
+# and uses select to handle them gracefully. pretty cool stuff!
 
 import socket
-import select
+import selectors
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8080):
-    socket_afn = socket.AF_INET
-    socket_stream = socket.SOCK_STREAM
+    S = selectors.DefaultSelector()
 
-    # with socket.socket(socket_afn, socket_stream) as server_socket:
-    server_socket = socket.socket(socket_afn, socket_stream)
+    def accept(socket: socket.socket):
+        client_conn, client_address = socket.accept()
+        print(f"> New connection from address: {client_address}")
+        client_conn.setblocking(False)
+        S.register(client_conn, selectors.EVENT_READ, read)
+
+    def read(conn: socket.socket):
+        try:
+            data = conn.recv(1024)
+
+            if data:
+                print("> requesting")
+                print(data.decode("utf-8"))
+
+                response = (
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type text/plain\r\n"
+                    "Content-Length 20\r\n"
+                    "\r\n"
+                    "HELLO ON THIS SERVER"
+                )
+
+                conn.sendall(response.encode("utf-8"))
+            S.unregister(conn)
+            conn.close()
+
+        except ConnectionResetError:
+            S.unregister(conn)
+            conn.close()
+
+    server_socket = socket.socket()
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((host, port))
-    server_socket.listen(1)
-    print(f"> serving on http://{host}:{port} ...")
-
-    # we can non-block here right???
+    server_socket.listen()
     server_socket.setblocking(False)
 
-    sockets = [server_socket]
+    S.register(server_socket, selectors.EVENT_READ, accept)
+
+    print(f"> serving on http://{host}:{port} ...")
+
     try:
         while True:
-            readable, _, _ = select.select(sockets, [], [])
-
-            for sock in readable:
-                if sock is server_socket:
-                    client_sock, client_add = server_socket.accept()
-                    print(
-                        f"> 'we got a match' :) hahha, lol. New Connection from: {client_add}"
-                    )
-                    client_sock.setblocking(False)
-                    sockets.append(client_sock)
-                else:
-                    try:
-                        request = sock.recv(1024)
-                        if request:
-                            print("> receiving???")
-                            print(request.decode("utf-8"))
-
-                            response = (
-                                "HTTP/1.1 200 OK\r\n"
-                                "Content-Type text/plain\r\n"
-                                "Content-Length 20\r\n"
-                                "\r\n"
-                                "HELLO ON THIS SERVER"
-                            )
-
-                            sock.sendall(response.encode("utf-8"))
-                            sockets.remove(sock)
-                            sock.close()
-
-                        else:
-                            sockets.remove(sock)
-                            sock.close()
-
-                    except ConnectionRefusedError:
-                        sockets.remove(sock)
-                        sock.close()
+            events = S.select()
+            for key, _ in events:
+                callback = key.data
+                callback(key.fileobj)
 
     except KeyboardInterrupt:
         print("\n\r>> absolutely shutting down!")
-        for sock in sockets:
-            sock.close()
+    finally:
+        server_socket.close()
 
 
 if __name__ == "__main__":
