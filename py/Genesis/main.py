@@ -28,14 +28,27 @@
 # ---
 # moving on to asyncios :) pretty excited about this one
 # a code-overhaul
+# asyncio uses selector which uses select, all to start the server,
+# using coroutines to manage several clients, but noticed it currently doesn't terminate
+# unless we terminate all but on clients.
+# ---
+# we want to now broadcast the messages from clients back to all users
+# as against one-to-one, let's go
+# yeah, some success with that!
+# also added alerting others when other addresses join in!
 
 import asyncio
 from typing import Any
 
 
+connected_writers = set()
+
+
 async def handle_client(reader: Any, writer: Any):
     addr = writer.get_extra_info("peername")
     print(f"> listening on this address: {addr}")
+    connected_writers.add(writer)
+    await broadcast(message=f"{writer} just joined")
 
     try:
         while True:
@@ -45,23 +58,35 @@ async def handle_client(reader: Any, writer: Any):
 
             message = data.decode().strip()
             print(f"> on {addr}, said...data: {message}")
-            response = f"You said: {message} \n"
-            writer.write(response.encode())
-            await writer.drain()
+            # response = f"You said: {message} \n"
+            # writer.write(response.encode())
+            # await writer.drain()
+            broadcast_message = f"{addr} says: {message}"
+            await broadcast(message=broadcast_message, exclude=writer)
 
     except ConnectionResetError:
         pass
 
-    except KeyboardInterrupt:
-        writer.close()
-        reader.close()
-        await writer.wait_closed()
-        await reader.wait_closed()
-
     finally:
+        connected_writers.remove(writer)
         print(f"> closed connection on address {addr}")
         writer.close()
         await writer.wait_closed()
+
+
+async def broadcast(message: str, exclude=None):
+    to_remove = set()
+    for writer in connected_writers:
+        if writer is exclude:
+            continue
+
+        try:
+            writer.write(message.encode())
+            await writer.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            to_remove.add(writer)
+
+    connected_writers.difference_update(to_remove)
 
 
 async def main():
