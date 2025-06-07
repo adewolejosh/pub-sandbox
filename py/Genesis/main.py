@@ -36,71 +36,97 @@
 # as against one-to-one, let's go
 # yeah, some success with that!
 # also added alerting others when other addresses join in!
+# ---
+# two more things to do: parsing HTTP requests and gracefully shutting down
+# ---
+# parsing? some overhaul
+# http-parsing from scratch, handling requests, 404, pinging and all that
+# Let's goooooo!
+# ---
 
-import asyncio
-from typing import Any
+import socket
 
 
-connected_writers = set()
+def parsed_response(request: str):
+    lines = request.split("\r\n")
+    request_line = lines[0]
+    method, path, version = request_line.split()
+
+    headers = {}
+    for line in lines[1:]:
+        if line == "":
+            break
+
+        k, v = line.split(":", 1)
+        headers[k.strip()] = v.strip()
+
+    allowed_paths = ["/hello", "/ping"]
+    print(f"heressss path {path}")
+    if path not in allowed_paths:
+        return {
+            "method": method,
+            "path": path,
+            "version": version,
+            "headers": headers,
+            "code": 404,
+        }
+
+    if "ping" in path:
+        return {
+            "method": method,
+            "path": path + "-pong",
+            "version": version,
+            "headers": headers,
+            "code": 200,
+        }
+
+    return {
+        "method": method,
+        "path": path,
+        "version": version,
+        "headers": headers,
+        "code": 200,
+    }
 
 
-async def handle_client(reader: Any, writer: Any):
-    addr = writer.get_extra_info("peername")
-    print(f"> listening on this address: {addr}")
-    connected_writers.add(writer)
-    await broadcast(message=f"{writer} just joined")
+def run_server(host: str = "127.0.0.1", port: int = 8080):
+    socket_afn = socket.AF_INET
+    socket_stream = socket.SOCK_STREAM
 
-    try:
+    with socket.socket(socket_afn, socket_stream) as server_socket:
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind((host, port))
+        server_socket.listen(1)
+        print(f"> listening on {host}:{port}")
+
         while True:
-            data = await reader.read(100)
-            if not data:
-                break
+            client_conn, client_addr = server_socket.accept()
 
-            message = data.decode().strip()
-            print(f"> on {addr}, said...data: {message}")
-            # response = f"You said: {message} \n"
-            # writer.write(response.encode())
-            # await writer.drain()
-            broadcast_message = f"{addr} says: {message}"
-            await broadcast(message=broadcast_message, exclude=writer)
+            with client_conn as conn:
+                data = conn.recv(1024).decode("utf-8")
 
-    except ConnectionResetError:
-        pass
+                print("Data gotten from request")
+                print(data)
 
-    finally:
-        connected_writers.remove(writer)
-        print(f"> closed connection on address {addr}")
-        writer.close()
-        await writer.wait_closed()
+                parsed_res = parsed_response(data)
 
+                print("ALL WE ARE SAYING, HAHA")
+                print(parsed_res)
 
-async def broadcast(message: str, exclude=None):
-    to_remove = set()
-    for writer in connected_writers:
-        if writer is exclude:
-            continue
-
-        try:
-            writer.write(message.encode())
-            await writer.drain()
-        except (BrokenPipeError, ConnectionResetError):
-            to_remove.add(writer)
-
-    connected_writers.difference_update(to_remove)
-
-
-async def main():
-    server = await asyncio.start_server(handle_client, "127.0.0.1", 8080)
-    addr = server.sockets[0].getsockname()
-    print(f":> started server with address: {addr}")
-
-    async with server:
-        await server.serve_forever()
+                res_body = f"Finally! {parsed_res['path']}"
+                response = (
+                    f"HTTP/1.1 {parsed_res['code']} OK\r\n"
+                    "Content-Type: text/plain\r\n"
+                    f"Content-Length: {len(res_body)}\r\n"
+                    "\r\n"
+                    f"{res_body}"
+                )
+                conn.sendall(response.encode())
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        run_server()
 
     except KeyboardInterrupt:
         print("\n\r> absolutely shutting down the server")
