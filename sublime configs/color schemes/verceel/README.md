@@ -1,0 +1,2 @@
+prompt to claude: """Help convert the contents in the "verceel" file into a proper sublime color scheme, for reference, I pasted what a proper color scheme in sublime looks like"""
+uploaded "vscode vercel theme" contents copied into verceel.sublime-settings file and "one theme" on ST4's current scheme.
